@@ -14,7 +14,7 @@ import 'package:record/record.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
 import './utils.dart';
 
-// 🔧 优化后的SenseVoice配置 - 解决初始化慢问题
+// 🔧 完全复刻反编译APK的SenseVoice配置
 Future<sherpa_onnx.OfflineRecognizer> createSenseVoiceRecognizer() async {
   final modelDir =
       'assets/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17';
@@ -29,8 +29,8 @@ Future<sherpa_onnx.OfflineRecognizer> createSenseVoiceRecognizer() async {
     senseVoice: senseVoiceConfig,
     tokens: await copyAssetFile('$modelDir/tokens.txt'),
     modelType: 'sense_voice',
-    numThreads: 1, // 🎯 降低线程数加快初始化
-    debug: false, // 🎯 关闭调试模式
+    numThreads: 2, // 🎯 严格复刻：反编译APK强制设置为2线程
+    debug: false,
   );
 
   final config = sherpa_onnx.OfflineRecognizerConfig(
@@ -42,20 +42,20 @@ Future<sherpa_onnx.OfflineRecognizer> createSenseVoiceRecognizer() async {
   return sherpa_onnx.OfflineRecognizer(config);
 }
 
-// 🔧 优化VAD配置 - 减少延迟
+// 🔧 完全复刻反编译APK的VAD配置
 Future<sherpa_onnx.VoiceActivityDetector> createVAD() async {
   final sileroVadConfig = sherpa_onnx.SileroVadModelConfig(
     model: await copyAssetFile('assets/silero_vad.onnx'),
-    minSilenceDuration: 0.3, // 🎯 减少静音时长要求
-    minSpeechDuration: 0.2, // 🎯 减少最小语音时长
-    maxSpeechDuration: 8.0, // 🎯 适中的最大语音时长
-    threshold: 0.45, // 🎯 调低阈值提高敏感度
+    minSilenceDuration: 0.5, // 🎯 复刻反编译APK: 0.5f
+    minSpeechDuration: 0.25, // 🎯 复刻反编译APK: 0.25f
+    maxSpeechDuration: 8.0,
+    threshold: 0.45,
   );
 
   final vadConfig = sherpa_onnx.VadModelConfig(
     sileroVad: sileroVadConfig,
     sampleRate: 16000,
-    numThreads: 2, // 🎯 VAD也使用单线程
+    numThreads: 1, // 🎯 严格复刻：反编译APK的VAD默认使用1线程
   );
 
   return sherpa_onnx.VoiceActivityDetector(
@@ -75,7 +75,7 @@ class _SimulateStreamingAsrScreenState
   late final TextEditingController _controller;
   late final AudioRecorder _audioRecorder;
 
-  String _title = 'SenseVoice多语言实时识别 (优化版)';
+  String _title = 'SenseVoice多语言实时识别 (严格复刻版)';
   String _last = '';
   int _index = 0;
   bool _isInitialized = false;
@@ -455,7 +455,7 @@ class _SimulateStreamingAsrScreenState
       home: Scaffold(
         appBar: AppBar(
           title: Text(_title),
-          backgroundColor: Colors.green[700], // 🎯 绿色表示优化版
+          backgroundColor: Colors.purple[700], // 🎯 紫色表示严格复刻版
           foregroundColor: Colors.white,
         ),
         body: Column(
@@ -465,21 +465,21 @@ class _SimulateStreamingAsrScreenState
               padding: const EdgeInsets.all(16),
               margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.green[50], // 🎯 配色更新
+                color: Colors.purple[50], // 🎯 配色更新
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.green[200]!),
+                border: Border.all(color: Colors.purple[200]!),
               ),
               child: Column(
                 children: [
-                  const Icon(Icons.speed, color: Colors.green), // 🎯 性能优化图标
+                  const Icon(Icons.verified, color: Colors.purple), // 🎯 验证图标
                   const SizedBox(height: 8),
                   const Text(
-                    'SenseVoice优化版',
+                    'SenseVoice严格复刻版',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    '⚡ 快速初始化 | 🎯 稳定识别 | 📝 减少跳动',
+                    '🎯 Recognizer: 2线程 | 🔧 VAD: 1线程 | 📋 严格按反编译APK',
                     style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                   const SizedBox(height: 4),
@@ -509,8 +509,9 @@ class _SimulateStreamingAsrScreenState
                   style: const TextStyle(fontSize: 16),
                   decoration: InputDecoration(
                     border: InputBorder.none,
-                    hintText:
-                        _isInitialized ? '开始说话，优化版实时识别...' : '正在初始化，请稍候...',
+                    hintText: _isInitialized
+                        ? '开始说话，严格复刻反编译APK的实时识别...'
+                        : '正在初始化，请稍候...',
                   ),
                 ),
               ),
