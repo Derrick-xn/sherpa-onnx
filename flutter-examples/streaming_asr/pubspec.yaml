@@ -47,3 +47,6 @@ flutter:
   assets:
     - assets/
     - assets/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20/
+    - assets/models/
+    - assets/models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/
+    - assets/silero_vad.onnx
