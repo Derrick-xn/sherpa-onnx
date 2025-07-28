@@ -11,8 +11,7 @@ Future<sherpa_onnx.OnlineModelConfig> getOnlineModelConfig(
           'assets/sherpa-onnx-streaming-zipformer-bilingual-zh-en-2023-02-20';
       return sherpa_onnx.OnlineModelConfig(
         transducer: sherpa_onnx.OnlineTransducerModelConfig(
-          encoder:
-              await copyAssetFile('$modelDir/encoder-epoch-99-avg-1.int8.onnx'),
+          encoder: await copyAssetFile('$modelDir/encoder-epoch-99-avg-1.onnx'),
           decoder: await copyAssetFile('$modelDir/decoder-epoch-99-avg-1.onnx'),
           joiner: await copyAssetFile('$modelDir/joiner-epoch-99-avg-1.onnx'),
         ),
