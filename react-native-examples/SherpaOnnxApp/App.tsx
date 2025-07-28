@@ -211,63 +211,76 @@ function App(): React.JSX.Element {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
+    <ScrollView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       
-      {/* 标题 */}
-      <View style={styles.header}>
-        <Text style={styles.title}>SenseVoice 语音识别</Text>
-        <Text style={styles.subtitle}>基于 Sherpa-ONNX + VAD</Text>
-        {!isInitialized && (
-          <Text style={styles.initStatus}>正在初始化...</Text>
+      {/* 标题区域 - 更接近Flutter风格 */}
+      <View style={styles.headerContainer}>
+        <Text style={styles.titleText}>SenseVoice 语音识别</Text>
+        <Text style={styles.subtitleText}>基于 Sherpa-ONNX + VAD</Text>
+        <View style={styles.statusBadge}>
+          <Text style={styles.statusBadgeText}>
+            {isInitialized ? '✅ 已初始化' : '🔄 初始化中...'}
+          </Text>
+        </View>
+        {isInitialized && (
+          <Text style={styles.configText}>
+            🎯 识别器: 2线程 | 🔧 VAD: 1线程 | 📋 严格复刻反编译APK
+          </Text>
         )}
       </View>
 
-      {/* 状态显示 */}
+      {/* 状态指示区域 */}
       <View style={styles.statusContainer}>
         <Text style={styles.statusText}>{status}</Text>
         {isRecording && (
-          <Text style={styles.recordTime}>录音时长: {recordTime}</Text>
+          <Text style={styles.recordTime}>{recordTime}</Text>
         )}
       </View>
 
-      {/* 文本显示区域 */}
-      <ScrollView style={styles.textContainer}>
-        <Text style={styles.recognizedText}>
-          {recognizedText || '点击录音按钮开始语音识别...\n\n支持中文、英文、日文、韩文、粤语等多语言识别\n集成VAD语音活动检测，自动分段识别'}
-        </Text>
-      </ScrollView>
+      {/* 识别结果显示区域 - Flutter风格 */}
+      <View style={styles.textContainer}>
+        <ScrollView style={styles.resultScrollView}>
+          <Text style={styles.recognizedText}>
+            {recognizedText || (isInitialized ? 
+              '开始说话，体验多语言实时识别...\n支持：中文、英文、日文、韩文、粤语' : 
+              '正在初始化模型，请稍候...'
+            )}
+          </Text>
+        </ScrollView>
+      </View>
 
-      {/* 控制按钮 */}
+      {/* 控制按钮 - 参考Flutter的设计 */}
       <View style={styles.controlsContainer}>
         <TouchableOpacity
           style={[
             styles.recordButton,
-            isRecording ? styles.recordingButton : styles.idleButton,
-            !isInitialized && styles.disabledButton,
+            isRecording ? styles.recordingButton : 
+            isInitialized ? styles.idleButton : styles.disabledButton
           ]}
           onPress={isRecording ? stopRecording : startRecording}
-          disabled={!isInitialized || status === '处理中...'}>
+          disabled={!isInitialized}
+        >
           <Text style={styles.recordButtonText}>
             {isRecording ? '停止录音' : '开始录音'}
           </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={[styles.clearButton, !recognizedText && styles.disabledButton]}
+          style={styles.clearButton}
           onPress={clearText}
-          disabled={!recognizedText || isRecording}>
+        >
           <Text style={styles.clearButtonText}>清空文本</Text>
         </TouchableOpacity>
       </View>
 
-      {/* 说明文字 */}
+      {/* 底部信息 */}
       <View style={styles.footerContainer}>
         <Text style={styles.footerText}>
-          {isInitialized ? 'SenseVoice 多语言语音识别已就绪' : '正在加载语音识别模型...'}
+          SenseVoice 多语言语音识别{isInitialized ? '已就绪' : '准备中'}
         </Text>
       </View>
-    </SafeAreaView>
+    </ScrollView>
   );
 }
 
@@ -276,7 +289,7 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#f5f5f5',
   },
-  header: {
+  headerContainer: {
     alignItems: 'center',
     paddingVertical: 20,
     backgroundColor: '#ffffff',
@@ -286,21 +299,35 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 4,
   },
-  title: {
+  titleText: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333333',
   },
-  subtitle: {
+  subtitleText: {
     fontSize: 14,
     color: '#666666',
     marginTop: 4,
   },
-  initStatus: {
+  statusBadge: {
+    backgroundColor: '#E0F2F7',
+    borderRadius: 10,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    marginTop: 8,
+    borderWidth: 1,
+    borderColor: '#B0E0E6',
+  },
+  statusBadgeText: {
     fontSize: 12,
-    color: '#FF9800',
-    marginTop: 4,
-    fontStyle: 'italic',
+    color: '#007BFF',
+    fontWeight: 'bold',
+  },
+  configText: {
+    fontSize: 12,
+    color: '#666666',
+    marginTop: 8,
+    textAlign: 'center',
   },
   statusContainer: {
     padding: 16,
@@ -328,6 +355,9 @@ const styles = StyleSheet.create({
     shadowOffset: {width: 0, height: 1},
     shadowOpacity: 0.1,
     shadowRadius: 2,
+  },
+  resultScrollView: {
+    flex: 1,
   },
   recognizedText: {
     fontSize: 16,

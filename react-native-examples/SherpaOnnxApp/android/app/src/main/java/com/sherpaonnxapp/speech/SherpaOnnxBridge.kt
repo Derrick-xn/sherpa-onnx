@@ -29,6 +29,11 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
     private var lastStableText = ""
     private var stableCounter = 0
     private var currentPartialText = ""
+    
+    // 🔧 新增：Flutter风格的重复检测机制
+    private var lastProcessedText = ""
+    private var duplicateCounter = 0
+    private val maxDuplicates = 3
 
     companion object {
         init {
@@ -140,11 +145,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             
             isProcessing.set(true)
             
-            // 添加音频数据到缓冲区
-            audioBuffer.addAll(audioData.toList())
-            
-            // 处理音频数据
-            processAudioBuffer()
+            // 🔧 改进：添加音频分块处理（复刻Flutter逻辑）
+            processAudioInChunks(audioData)
             
             isProcessing.set(false)
             getCurrentText()
@@ -155,40 +157,57 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         }
     }
 
-    private fun processAudioBuffer() {
-        if (audioBuffer.size < windowSize) return
+    // 🔧 新增：模仿Flutter的音频分块处理
+    private fun processAudioInChunks(audioData: FloatArray) {
+        val chunkSize = 1600 // 0.1秒音频块，完全复刻Flutter
         
-        // VAD处理
-        val vadResult = processVAD()
+        audioBuffer.addAll(audioData.toList())
         
-        if (vadResult) {
-            // 执行实时识别
-            performRealtimeRecognition()
+        // 🎯 精确的滑动窗口机制（复刻Flutter逻辑）
+        if (audioBuffer.size >= windowSize * 3) {
+            val newOffset = audioBuffer.size - windowSize
+            val removeCount = audioBuffer.size - windowSize
+            repeat(removeCount) { audioBuffer.removeAt(0) }
+        }
+        
+        // 🎯 VAD处理 - 主要用于检测完整语音段
+        if (audioBuffer.size >= chunkSize) {
+            processVADWithBuffer()
+        }
+        
+        // 🎯 优化的实时识别 - 减少频率避免跳动（复刻Flutter算法）
+        if (audioBuffer.size >= windowSize && audioBuffer.size % 800 == 0) {
+            performStableRealtimeRecognition()
         }
     }
-
-    private fun processVAD(): Boolean {
-        val vadWindow = FloatArray(windowSize)
-        val startIndex = max(0, audioBuffer.size - windowSize)
-        
-        for (i in 0 until windowSize) {
-            vadWindow[i] = audioBuffer[startIndex + i]
-        }
-        
-        vad?.acceptWaveform(vadWindow)
-        
-        while (vad?.empty() == false) {
-            val speechSegment = vad?.front()
-            vad?.pop()
-            
-            if (speechSegment != null) {
-                // 处理语音段
-                processFinalSpeechSegment(speechSegment)
-                return true
+    
+    // 🔧 改进：复刻Flutter的VAD处理逻辑
+    private fun processVADWithBuffer() {
+        try {
+            val vadChunkSize = 1600 // 与Flutter保持一致
+            if (audioBuffer.size >= vadChunkSize) {
+                val vadData = FloatArray(vadChunkSize)
+                val startIndex = kotlin.math.max(0, audioBuffer.size - vadChunkSize)
+                
+                for (i in 0 until vadChunkSize) {
+                    vadData[i] = audioBuffer[startIndex + i]
+                }
+                
+                vad?.acceptWaveform(vadData)
+                
+                // 🎯 处理VAD检测到的完整语音段
+                while (vad?.empty() == false) {
+                    val speechSegment = vad?.front()
+                    vad?.pop()
+                    
+                    if (speechSegment != null) {
+                        processFinalSpeechSegment(speechSegment)
+                    }
+                }
             }
+        } catch (e: Exception) {
+            Log.e(TAG, "VAD processing error: ${e.message}")
         }
-        
-        return false
     }
 
     private fun processFinalSpeechSegment(speechSegment: SpeechSegment) {
@@ -276,7 +295,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         return try {
             // 处理剩余的音频缓冲区
             if (audioBuffer.isNotEmpty()) {
-                processAudioBuffer()
+                // 🔧 修复：使用新的音频处理方法
+                processAudioInChunks(FloatArray(0)) // 触发最终处理
             }
             
             val finalText = getCurrentText()
@@ -300,5 +320,94 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         } catch (e: Exception) {
             Log.e(TAG, "Error during destroy: ${e.message}")
         }
+    }
+    
+    // 🔧 新增：复刻Flutter的重复检测算法
+    private fun isResultDuplicate(newResult: String): Boolean {
+        if (newResult.isEmpty() || newResult.length <= 1) return true
+        
+        // 1. 完全相同检测
+        if (newResult == lastProcessedText) {
+            duplicateCounter++
+            return duplicateCounter > maxDuplicates
+        }
+        
+        // 2. 重复字符模式检测（如"服了服了服了"）
+        val chars = newResult.toCharArray()
+        if (chars.size > 4) {
+            val firstChar = chars[0]
+            val allSame = chars.all { it == firstChar || it == ' ' }
+            if (allSame) {
+                Log.w(TAG, "Detected repeated character pattern: $newResult")
+                return true
+            }
+        }
+        
+        // 3. 词汇重复检测（>50%重复）
+        val words = newResult.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+        if (words.size > 2) {
+            val uniqueWords = words.toSet()
+            if (uniqueWords.size < words.size * 0.5) {
+                Log.w(TAG, "Detected word repetition pattern: $newResult")
+                return true
+            }
+        }
+        
+        // 重置计数器
+        lastProcessedText = newResult
+        duplicateCounter = 0
+        return false
+    }
+    
+    // 🔧 改进：更稳定的实时识别
+    private fun performStableRealtimeRecognition() {
+        try {
+            if (audioBuffer.size < windowSize) return
+            
+            val windowStart = max(0, audioBuffer.size - windowSize)
+            val windowAudio = FloatArray(windowSize)
+            
+            for (i in 0 until windowSize) {
+                windowAudio[i] = audioBuffer[windowStart + i]
+            }
+            
+            val stream = offlineRecognizer?.createStream()
+            stream?.acceptWaveform(windowAudio, sampleRate)
+            
+            offlineRecognizer?.decode(stream!!)
+            val result = offlineRecognizer?.getResult(stream!!)
+            val text = result?.text?.trim() ?: ""
+            
+            // 🎯 重复检测 + 稳定性检查
+            if (text.isNotEmpty() && !isResultDuplicate(text)) {
+                if (text == lastStableText) {
+                    stableCounter++
+                    if (stableCounter >= 2) {
+                        // 连续2次相同且非重复才更新
+                        updateRealtimeTextStable(text)
+                    }
+                } else {
+                    // 上一个结果稳定后才可能添加到结果列表
+                    if (stableCounter >= 2 && lastStableText.isNotEmpty()) {
+                        // 这里可以考虑是否需要将稳定的结果添加到最终列表
+                        Log.d(TAG, "Previous stable result: $lastStableText")
+                    }
+                    lastStableText = text
+                    stableCounter = 1
+                }
+            }
+            
+            stream?.release()
+        } catch (e: Exception) {
+            Log.e(TAG, "Error in stable realtime recognition: ${e.message}")
+        }
+    }
+    
+    // 🔧 新增：稳定的实时文本更新
+    private fun updateRealtimeTextStable(text: String) {
+        if (text == currentPartialText) return // 避免重复更新
+        
+        currentPartialText = text
+        Log.d(TAG, "Updated stable partial text: $text")
     }
 } 
