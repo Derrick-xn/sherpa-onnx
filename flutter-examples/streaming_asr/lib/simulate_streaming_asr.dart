@@ -2,6 +2,8 @@
 import 'dart:async';
 import 'dart:typed_data';
 import 'dart:collection';
+import 'dart:isolate';
+import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -73,7 +75,7 @@ class _SimulateStreamingAsrScreenState
   late final TextEditingController _controller;
   late final AudioRecorder _audioRecorder;
 
-  String _title = 'SenseVoice多语言实时识别 (修复版)';
+  String _title = 'SenseVoice多语言实时识别 (实时版)';
   String _last = '';
   int _index = 0;
   bool _isInitialized = false;
@@ -85,13 +87,27 @@ class _SimulateStreamingAsrScreenState
   StreamSubscription<RecordState>? _recordSub;
   RecordState _recordState = RecordState.stop;
 
-  // 🎯 核心修复：采用反编译APK的Channel队列机制
-  final Queue<Float32List> _audioQueue = Queue<Float32List>();
-  StreamSubscription<List<int>>? _audioStreamSub;
-  Timer? _processingTimer;
+  // 🎯 关键修复：严格按照反编译APK的双协程架构
+  // AnonymousClass1: 音频录制协程（对应samplesChannel.send）
+  StreamController<Float32List> _samplesChannel =
+      StreamController<Float32List>.broadcast();
 
-  // 🎯 避免重复处理的状态管理
-  bool _isProcessing = false;
+  // AnonymousClass2: 音频处理协程状态变量（严格按反编译APK）
+  List<double> _audioBuffer = [];
+  String _lastText = '';
+  int _offset = 0;
+  int _windowSize = 8000; // 0.5秒窗口
+  bool _isSpeechStarted = false;
+  int _startTime = 0;
+  bool _added = false;
+
+  // 实时文本显示
+  List<String> _resultList = [];
+  String _currentPartialText = '';
+
+  // 协程控制
+  StreamSubscription<List<int>>? _audioStreamSub;
+  StreamSubscription<Float32List>? _processingStreamSub;
 
   @override
   void initState() {
@@ -136,113 +152,163 @@ class _SimulateStreamingAsrScreenState
           numChannels: 1,
         );
 
-        // 🎯 关键修复：严格按照反编译APK的架构
+        // 🎯 重点：严格按照反编译APK的双协程架构
         final stream = await _audioRecorder.startStream(config);
 
-        // 🎯 音频录制协程：模拟反编译APK的samplesChannel.send逻辑
-        _audioStreamSub = stream.listen(
-          (rawData) {
-            _enqueueAudioData(rawData);
-          },
-          onDone: () {
-            print('🔇 音频流停止');
-          },
-        );
+        // 🎯 AnonymousClass1: 音频录制协程 (Dispatchers.IO)
+        _startAudioRecordingCoroutine(stream);
 
-        // 🎯 音频处理协程：从队列取数据处理，避免重复
-        _processingTimer = Timer.periodic(
-          const Duration(milliseconds: 100), // 🔧 100ms处理间隔
-          (_) => _processAudioQueue(),
-        );
+        // 🎯 AnonymousClass2: 音频处理协程 (Dispatchers.Default)
+        _startAudioProcessingCoroutine();
       }
     } catch (e) {
       print('❌ 启动录音失败: $e');
     }
   }
 
-  // 🎯 新增：音频入队逻辑 (对应反编译APK的samplesChannel.send)
-  void _enqueueAudioData(List<int> rawData) {
-    try {
-      // 转换为Float32List
-      final samplesFloat32 = convertBytesToFloat32(Uint8List.fromList(rawData));
+  // 🎯 AnonymousClass1: 音频录制协程（严格按反编译APK）
+  void _startAudioRecordingCoroutine(Stream<List<int>> audioStream) {
+    print('🎙️ 启动音频录制协程');
 
-      // 🎯 关键：按照反编译APK，每0.1秒的数据作为一个单元
-      const int chunkSize = 1600; // 16000 * 0.1 = 1600 samples
+    _audioStreamSub = audioStream.listen(
+      (rawData) {
+        try {
+          // 🎯 关键：按照反编译APK，每0.1秒的音频作为一个单元
+          final samplesFloat32 =
+              convertBytesToFloat32(Uint8List.fromList(rawData));
 
-      for (int i = 0; i < samplesFloat32.length; i += chunkSize) {
-        final end = (i + chunkSize < samplesFloat32.length)
-            ? i + chunkSize
-            : samplesFloat32.length;
+          // 分割为0.1秒的块（1600 samples = 16000 * 0.1）
+          const int chunkSize = 1600;
 
-        final chunk = Float32List.fromList(samplesFloat32.sublist(i, end));
+          for (int i = 0; i < samplesFloat32.length; i += chunkSize) {
+            final end = (i + chunkSize < samplesFloat32.length)
+                ? i + chunkSize
+                : samplesFloat32.length;
 
-        // 入队，限制队列大小避免内存泄漏
-        _audioQueue.add(chunk);
+            final chunk = Float32List.fromList(samplesFloat32.sublist(i, end));
 
-        // 保持队列大小合理 (最多30秒数据)
-        while (_audioQueue.length > 300) {
-          // 30秒 / 0.1秒 = 300块
-          _audioQueue.removeFirst();
+            // 🎯 关键：模拟samplesChannel.send(floatSamples)
+            if (!_samplesChannel.isClosed) {
+              _samplesChannel.add(chunk);
+            }
+          }
+        } catch (e) {
+          print('音频录制协程错误: $e');
         }
+      },
+      onDone: () {
+        print('🔇 音频录制协程停止');
+      },
+    );
+  }
+
+  // 🎯 AnonymousClass2: 音频处理协程（严格按反编译APK的复杂逻辑）
+  void _startAudioProcessingCoroutine() {
+    print('🔄 启动音频处理协程');
+
+    // 重置状态变量（按反编译APK）
+    _audioBuffer.clear();
+    _lastText = '';
+    _offset = 0;
+    _windowSize = 8000; // 0.5秒窗口
+    _isSpeechStarted = false;
+    _startTime = DateTime.now().millisecondsSinceEpoch;
+    _added = false;
+    _vad?.reset();
+
+    _processingStreamSub = _samplesChannel.stream.listen(
+      (audioChunk) {
+        _processAudioChunkRealtime(audioChunk);
+      },
+      onDone: () {
+        print('🔇 音频处理协程停止');
+      },
+    );
+  }
+
+  // 🎯 核心：实时音频处理（复刻反编译APK的复杂逻辑）
+  void _processAudioChunkRealtime(Float32List audioChunk) {
+    try {
+      // 添加到滑动缓冲区
+      _audioBuffer.addAll(audioChunk);
+
+      // 🎯 关键：滑动窗口机制（模拟反编译APK的buffer+offset逻辑）
+      if (_audioBuffer.length > _windowSize * 2) {
+        // 保持窗口大小，移除旧数据
+        _audioBuffer = _audioBuffer.sublist(_audioBuffer.length - _windowSize);
+        _offset = _audioBuffer.length - _windowSize;
+      }
+
+      // 实时VAD处理
+      if (_audioBuffer.length >= _windowSize ~/ 4) {
+        // 足够的数据进行VAD
+        _processRealtimeVAD();
+      }
+
+      // 🎯 关键：实时识别（不等待VAD完成）
+      if (_audioBuffer.length >= _windowSize ~/ 2) {
+        // 0.25秒数据
+        _processRealtimeRecognition();
       }
     } catch (e) {
-      print('音频入队失败: $e');
+      print('实时音频处理错误: $e');
     }
   }
 
-  // 🎯 新增：音频队列处理逻辑 (对应反编译APK的Channel.receive逻辑)
-  void _processAudioQueue() {
-    if (_isProcessing ||
-        _audioQueue.isEmpty ||
-        _vad == null ||
-        _recognizer == null) {
-      return;
-    }
-
-    _isProcessing = true;
-
+  // 🎯 实时VAD处理
+  void _processRealtimeVAD() {
     try {
-      // 🎯 关键：每次只处理队列中的新数据，避免重复
-      final List<Float32List> currentBatch = [];
+      if (_vad == null || _audioBuffer.length < 1600) return;
 
-      // 取出所有待处理的音频块
-      while (_audioQueue.isNotEmpty && currentBatch.length < 10) {
-        // 最多处理1秒数据
-        currentBatch.add(_audioQueue.removeFirst());
-      }
+      // 取最近的音频进行VAD
+      final recentAudio = Float32List.fromList(
+          _audioBuffer.sublist(math.max(0, _audioBuffer.length - 1600)));
 
-      if (currentBatch.isEmpty) {
-        _isProcessing = false;
-        return;
-      }
+      _vad!.acceptWaveform(recentAudio);
 
-      // 🎯 合并音频块进行VAD处理
-      final List<double> combinedAudio = [];
-      for (final chunk in currentBatch) {
-        combinedAudio.addAll(chunk);
-      }
-
-      final Float32List samples = Float32List.fromList(combinedAudio);
-
-      // VAD处理
-      _vad!.acceptWaveform(samples);
-
-      // 🎯 关键：只有当VAD检测到完整语音段时才进行识别
+      // 处理VAD检测到的语音段
       while (!_vad!.isEmpty()) {
         final speechSegment = _vad!.front();
         _vad!.pop();
 
-        _processCompleteSpeechSegment(speechSegment);
+        // 完整语音段识别
+        _processFinalSpeechSegment(speechSegment);
       }
     } catch (e) {
-      print('❌ 队列处理失败: $e');
-    } finally {
-      _isProcessing = false;
+      print('VAD处理错误: $e');
     }
   }
 
-  // 🎯 处理完整语音段 (单次识别，无重复)
-  void _processCompleteSpeechSegment(dynamic speechSegment) {
+  // 🎯 实时识别（边说边显示的关键）
+  void _processRealtimeRecognition() {
+    try {
+      if (_recognizer == null || _audioBuffer.length < 3200) return; // 0.2秒数据
+
+      // 🎯 关键：滑动窗口实时识别
+      final windowAudio = Float32List.fromList(
+          _audioBuffer.sublist(math.max(0, _audioBuffer.length - _windowSize)));
+
+      final stream = _recognizer!.createStream();
+      stream.acceptWaveform(samples: windowAudio, sampleRate: _sampleRate);
+
+      _recognizer!.decode(stream);
+      final result = _recognizer!.getResult(stream);
+      final text = result.text.trim();
+
+      // 🎯 实时文本更新（边说边显示）
+      if (text.isNotEmpty && text != _lastText) {
+        _updatePartialText(text);
+        _lastText = text;
+      }
+
+      stream.free();
+    } catch (e) {
+      print('实时识别错误: $e');
+    }
+  }
+
+  // 🎯 完整语音段处理（最终结果）
+  void _processFinalSpeechSegment(dynamic speechSegment) {
     try {
       final stream = _recognizer!.createStream();
       stream.acceptWaveform(
@@ -253,42 +319,70 @@ class _SimulateStreamingAsrScreenState
       final text = result.text.trim();
 
       if (text.isNotEmpty) {
-        _updateFinalText(text);
+        _addFinalResult(text);
       }
 
       stream.free();
     } catch (e) {
-      print('语音段识别错误: $e');
+      print('完整语音段处理错误: $e');
     }
   }
 
-  // 🎯 最终文本更新 (确保不重复)
-  void _updateFinalText(String text) {
+  // 🎯 实时文本更新（部分结果，边说边显示）
+  void _updatePartialText(String text) {
     setState(() {
-      String textToDisplay;
-      if (_last.isEmpty) {
-        textToDisplay = '$_index: $text';
-      } else {
-        textToDisplay = '$_index: $text\n$_last';
+      _currentPartialText = text;
+
+      // 显示当前的部分结果和历史结果
+      String displayText = '';
+      for (int i = 0; i < _resultList.length; i++) {
+        displayText += '$i: ${_resultList[i]}\n';
       }
 
-      _last = textToDisplay;
-      _index += 1;
+      // 添加当前正在识别的文本
+      if (_currentPartialText.isNotEmpty) {
+        displayText += '${_resultList.length}: $_currentPartialText (识别中...)';
+      }
 
       _controller.value = TextEditingValue(
-        text: textToDisplay,
-        selection: TextSelection.collapsed(offset: textToDisplay.length),
+        text: displayText,
+        selection: TextSelection.collapsed(offset: displayText.length),
+      );
+    });
+  }
+
+  // 🎯 添加最终结果
+  void _addFinalResult(String text) {
+    setState(() {
+      _resultList.add(text);
+      _currentPartialText = ''; // 清空部分结果
+
+      // 更新显示
+      String displayText = '';
+      for (int i = 0; i < _resultList.length; i++) {
+        displayText += '$i: ${_resultList[i]}';
+        if (i < _resultList.length - 1) displayText += '\n';
+      }
+
+      _controller.value = TextEditingValue(
+        text: displayText,
+        selection: TextSelection.collapsed(offset: displayText.length),
       );
     });
 
-    print('✅ 识别结果: $text'); // 调试日志
+    print('✅ 最终结果: $text');
   }
 
   Future<void> _stop() async {
     _audioStreamSub?.cancel();
-    _processingTimer?.cancel();
-    _audioQueue.clear();
-    _isProcessing = false;
+    _processingStreamSub?.cancel();
+    _samplesChannel.close();
+
+    // 重新创建channel为下次使用
+    _samplesChannel = StreamController<Float32List>.broadcast();
+
+    _audioBuffer.clear();
+    _currentPartialText = '';
     await _audioRecorder.stop();
   }
 
@@ -322,7 +416,7 @@ class _SimulateStreamingAsrScreenState
       home: Scaffold(
         appBar: AppBar(
           title: Text(_title),
-          backgroundColor: Colors.orange[700], // 🎯 橙色表示修复版
+          backgroundColor: Colors.blue[700], // 🎯 蓝色表示实时版
           foregroundColor: Colors.white,
         ),
         body: Column(
@@ -332,22 +426,22 @@ class _SimulateStreamingAsrScreenState
               padding: const EdgeInsets.all(16),
               margin: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: Colors.orange[50], // 🎯 配色更新
+                color: Colors.blue[50], // 🎯 配色更新
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.orange[200]!),
+                border: Border.all(color: Colors.blue[200]!),
               ),
               child: Column(
                 children: [
-                  const Icon(Icons.build_circle,
-                      color: Colors.orange), // 🎯 修复图标
+                  const Icon(Icons.mic_external_on,
+                      color: Colors.blue), // 🎯 实时图标
                   const SizedBox(height: 8),
                   const Text(
-                    'SenseVoice多语言模型 (修复版)',
+                    'SenseVoice多语言模型 (实时版)',
                     style: TextStyle(fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 4),
                   const Text(
-                    '🔧 修复重复识别 | ✨ 标点符号 | 📋 队列机制',
+                    '🎙️ 双协程架构 | ⚡ 边说边显示 | 🎯 滑动窗口',
                     style: TextStyle(fontSize: 12, color: Colors.grey),
                   ),
                   const SizedBox(height: 4),
@@ -377,7 +471,7 @@ class _SimulateStreamingAsrScreenState
                   style: const TextStyle(fontSize: 16),
                   decoration: const InputDecoration(
                     border: InputBorder.none,
-                    hintText: '说话完整句子后会显示识别结果...',
+                    hintText: '开始说话，实时识别结果将边说边显示...',
                   ),
                 ),
               ),
@@ -401,7 +495,8 @@ class _SimulateStreamingAsrScreenState
   @override
   void dispose() {
     _audioStreamSub?.cancel();
-    _processingTimer?.cancel();
+    _processingStreamSub?.cancel();
+    _samplesChannel.close();
     _recordSub?.cancel();
     _audioRecorder.dispose();
     _recognizer?.free();
