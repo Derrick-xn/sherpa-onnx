@@ -10,8 +10,13 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.Channel.Factory.UNLIMITED
+import java.io.File
+import java.io.FileOutputStream
+import java.io.RandomAccessFile
+import java.text.SimpleDateFormat
+import java.util.*
 
-// 🚀 完全复刻反编译APK的双协程架构
+// 🚀 完全复刻反编译APK的双协程架构 + 录音文件保存
 class SherpaOnnxBridge(private val assetManager: AssetManager) {
     private var offlineRecognizer: OfflineRecognizer? = null
     private var vad: Vad? = null
@@ -39,10 +44,19 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
     private var recordingJob: Job? = null
     private var processingJob: Job? = null
     
-    // 🎯 结果管理
+    // 🎯 结果管理 - 优化显示逻辑
     private val resultList = mutableListOf<String>()
     private var currentPartialText = ""
+    private var lastStableText = ""
+    private var stableCounter = 0
+    private var silentCounter = 0        // 🔧 新增：静音计数器
+    private val maxSilentFrames = 10     // 🔧 新增：最大静音帧数
     private var onResultCallback: ((String) -> Unit)? = null
+    
+    // 🎵 录音文件保存功能
+    private var audioFileWriter: FileOutputStream? = null
+    private var currentAudioFile: File? = null
+    private var recordedAudioData = mutableListOf<Short>()
 
     companion object {
         init {
@@ -142,6 +156,79 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         return OfflineRecognizer(assetManager, recognizerConfig)
     }
 
+    // 🎵 初始化录音文件
+    private fun initializeAudioFile(): File? {
+        return try {
+            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+            val fileName = "recording_$timestamp.wav"
+            
+            // 使用外部存储的 Downloads 目录
+            val downloadsDir = File("/storage/emulated/0/Download")
+            if (!downloadsDir.exists()) {
+                downloadsDir.mkdirs()
+            }
+            
+            val audioFile = File(downloadsDir, fileName)
+            
+            // 创建 WAV 文件头（44字节）
+            val fileOutputStream = FileOutputStream(audioFile)
+            writeWavHeader(fileOutputStream, 0) // 先写一个占位的header
+            
+            audioFileWriter = fileOutputStream
+            currentAudioFile = audioFile
+            recordedAudioData.clear()
+            
+            Log.i(TAG, "🎵 Audio file initialized: ${audioFile.absolutePath}")
+            audioFile
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to initialize audio file: ${e.message}")
+            null
+        }
+    }
+
+    // 🎵 写入WAV文件头
+    private fun writeWavHeader(fos: FileOutputStream, dataSize: Int) {
+        val header = ByteArray(44)
+        val fileSize = dataSize + 36
+        
+        // RIFF header
+        "RIFF".toByteArray().copyInto(header, 0)
+        intToByteArray(fileSize).copyInto(header, 4)
+        "WAVE".toByteArray().copyInto(header, 8)
+        
+        // fmt chunk
+        "fmt ".toByteArray().copyInto(header, 12)
+        intToByteArray(16).copyInto(header, 16)  // fmt chunk size
+        shortToByteArray(1).copyInto(header, 20) // PCM format
+        shortToByteArray(1).copyInto(header, 22) // channels
+        intToByteArray(sampleRate).copyInto(header, 24) // sample rate
+        intToByteArray(sampleRate * 2).copyInto(header, 28) // byte rate
+        shortToByteArray(2).copyInto(header, 32) // block align
+        shortToByteArray(16).copyInto(header, 34) // bits per sample
+        
+        // data chunk
+        "data".toByteArray().copyInto(header, 36)
+        intToByteArray(dataSize).copyInto(header, 40)
+        
+        fos.write(header)
+    }
+
+    private fun intToByteArray(value: Int): ByteArray {
+        return byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte()
+        )
+    }
+
+    private fun shortToByteArray(value: Int): ByteArray {
+        return byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte()
+        )
+    }
+
     // 🎯 复刻反编译APK的双协程启动
     fun startRecognition(): Boolean {
         return try {
@@ -153,11 +240,17 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             audioBuffer.clear()
             resultList.clear()
             lastText = ""
+            lastStableText = ""
+            stableCounter = 0
+            silentCounter = 0           // 🔧 重置静音计数器
             offset = 0
             isSpeechStarted = false
             startTime = System.currentTimeMillis()
             added = false
             currentPartialText = ""
+            
+            // 🎵 初始化录音文件
+            initializeAudioFile()
             
             isRecording.set(true)
             
@@ -188,6 +281,9 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
                 val bytesRead = audioRecord?.read(shortBuffer, 0, shortBuffer.size) ?: -1
                 
                 if (bytesRead > 0) {
+                    // 🎵 保存录音数据
+                    recordedAudioData.addAll(shortBuffer.take(bytesRead))
+                    
                     // 🎯 完全复刻反编译APK的转换逻辑
                     val floatSamples = FloatArray(bytesRead)
                     for (i in 0 until bytesRead) {
@@ -225,6 +321,21 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         try {
             audioBuffer.addAll(floatSamples.toList())
             
+            // 🔧 检测静音状态
+            val hasSignificantAudio = floatSamples.any { kotlin.math.abs(it) > 0.01f }
+            
+            if (!hasSignificantAudio) {
+                silentCounter++
+                // 🔧 静音时清除实时文本，避免闪动
+                if (silentCounter > maxSilentFrames && currentPartialText.isNotEmpty()) {
+                    currentPartialText = ""
+                    updateResults()
+                    Log.d(TAG, "🔇 Cleared partial text due to silence")
+                }
+            } else {
+                silentCounter = 0
+            }
+            
             // 🎯 VAD处理 - 主要用于检测完整语音段
             if (audioBuffer.size >= chunkSize) {
                 processVADWithBuffer()
@@ -237,8 +348,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
                 offset += removeCount
             }
             
-            // 🎯 优化的实时识别 - 减少频率避免跳动（复刻APK算法）
-            if (audioBuffer.size >= windowSize && audioBuffer.size % 800 == 0) {
+            // 🎯 优化的实时识别 - 只在有音频输入时进行
+            if (hasSignificantAudio && audioBuffer.size >= windowSize && audioBuffer.size % 800 == 0) {
                 performStableRealtimeRecognition()
             }
         } catch (e: Exception) {
@@ -283,9 +394,10 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             val result = offlineRecognizer?.getResult(stream!!)
             val text = result?.text?.trim() ?: ""
             
-            if (text.isNotEmpty() && text.length > 1) {
-                // 🎯 添加到结果列表（复刻反编译APK）
+            // 🔧 只添加有意义的文本（长度>2，且不是单个字符重复）
+            if (text.isNotEmpty() && text.length > 2 && !isRepeatedCharacter(text)) {
                 resultList.add(text)
+                currentPartialText = "" // 清除实时文本
                 updateResults()
                 Log.i(TAG, "✅ Speech segment recognized: $text")
             }
@@ -294,6 +406,13 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         } catch (e: Exception) {
             Log.e(TAG, "Error processing speech segment: ${e.message}")
         }
+    }
+
+    // 🔧 检测是否为重复字符
+    private fun isRepeatedCharacter(text: String): Boolean {
+        if (text.length < 3) return false
+        val firstChar = text[0]
+        return text.all { it == firstChar || it == '。' || it == '，' }
     }
 
     private fun performStableRealtimeRecognition() {
@@ -314,11 +433,19 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             val result = offlineRecognizer?.getResult(stream!!)
             val text = result?.text?.trim() ?: ""
             
-            // 🎯 稳定性检查 - 减少文字跳动
-            if (text.isNotEmpty() && text.length > 1 && text != lastText) {
-                lastText = text
-                currentPartialText = text
-                updateResults()
+            // 🔧 优化稳定性检查 - 避免显示无意义文本
+            if (text.isNotEmpty() && text.length > 2 && !isRepeatedCharacter(text) && text != lastText) {
+                if (text == lastStableText) {
+                    stableCounter++
+                    if (stableCounter >= 3) { // 🔧 提高稳定性要求
+                        lastText = text
+                        currentPartialText = text
+                        updateResults()
+                    }
+                } else {
+                    lastStableText = text
+                    stableCounter = 1
+                }
             }
             
             stream?.release()
@@ -339,8 +466,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             }
         }
         
-        // 添加当前部分识别结果
-        if (currentPartialText.isNotEmpty()) {
+        // 🔧 只在有意义时添加当前部分识别结果
+        if (currentPartialText.isNotEmpty() && currentPartialText.length > 2) {
             if (displayText.isNotEmpty()) {
                 displayText.append("\n")
             }
@@ -362,6 +489,9 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             // 停止录音
             audioRecord?.stop()
             
+            // 🎵 完成录音文件写入
+            finalizeAudioFile()
+            
             // 取消协程
             recordingJob?.cancel()
             processingJob?.cancel()
@@ -372,6 +502,49 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             Log.e(TAG, "❌ Failed to stop recognition: ${e.message}")
             false
         }
+    }
+
+    // 🎵 完成音频文件写入
+    private fun finalizeAudioFile() {
+        try {
+            if (audioFileWriter != null && currentAudioFile != null && recordedAudioData.isNotEmpty()) {
+                // 写入音频数据
+                for (sample in recordedAudioData) {
+                    audioFileWriter!!.write(sample.toInt() and 0xFF)
+                    audioFileWriter!!.write((sample.toInt() shr 8) and 0xFF)
+                }
+                
+                audioFileWriter!!.close()
+                
+                // 更新WAV文件头
+                val dataSize = recordedAudioData.size * 2
+                val randomAccessFile = RandomAccessFile(currentAudioFile!!, "rw")
+                
+                // 更新文件大小
+                randomAccessFile.seek(4)
+                randomAccessFile.write(intToByteArray(dataSize + 36))
+                
+                // 更新数据大小
+                randomAccessFile.seek(40)
+                randomAccessFile.write(intToByteArray(dataSize))
+                
+                randomAccessFile.close()
+                
+                Log.i(TAG, "🎵 Audio file saved: ${currentAudioFile!!.absolutePath}")
+                Log.i(TAG, "🎵 File size: ${currentAudioFile!!.length()} bytes")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Failed to finalize audio file: ${e.message}")
+        } finally {
+            audioFileWriter = null
+            currentAudioFile = null
+            recordedAudioData.clear()
+        }
+    }
+
+    // 🎵 获取最后录音文件路径
+    fun getLastRecordingPath(): String? {
+        return currentAudioFile?.absolutePath
     }
 
     fun destroy() {
@@ -411,7 +584,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             }
         }
         
-        if (currentPartialText.isNotEmpty()) {
+        // 🔧 只在有意义时显示当前部分文本
+        if (currentPartialText.isNotEmpty() && currentPartialText.length > 2) {
             if (displayText.isNotEmpty()) {
                 displayText.append("\n")
             }

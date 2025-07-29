@@ -71,8 +71,26 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         try {
             val success = bridge?.stopRecognition() ?: false
             if (success) {
-                promise.resolve(true)
+                // 🎵 获取录音文件路径
+                val recordingPath = bridge?.getLastRecordingPath()
+                
+                val result = Arguments.createMap()
+                result.putBoolean("success", true)
+                if (recordingPath != null) {
+                    result.putString("recordingPath", recordingPath)
+                    Log.i(TAG, "🎵 Recording saved to: $recordingPath")
+                }
+                
+                promise.resolve(result)
                 sendEvent("onRecognitionStopped", null)
+                
+                // 🎵 发送录音文件路径事件
+                if (recordingPath != null) {
+                    val params = Arguments.createMap()
+                    params.putString("filePath", recordingPath)
+                    sendEvent("onRecordingFileSaved", params)
+                }
+                
                 Log.i(TAG, "🛑 Recognition stopped successfully")
             } else {
                 promise.reject("STOP_ERROR", "Failed to stop recognition")
@@ -80,6 +98,22 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error stopping recognition: ${e.message}")
             promise.reject("STOP_ERROR", e.message)
+        }
+    }
+
+    // 🎵 获取最后录音文件路径
+    @ReactMethod
+    fun getLastRecordingPath(promise: Promise) {
+        try {
+            val recordingPath = bridge?.getLastRecordingPath()
+            if (recordingPath != null) {
+                promise.resolve(recordingPath)
+            } else {
+                promise.resolve(null)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error getting recording path: ${e.message}")
+            promise.reject("GET_PATH_ERROR", e.message)
         }
     }
 
@@ -100,13 +134,30 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     fun finishRecognition(promise: Promise) {
         try {
             val result = bridge?.finishRecognition() ?: ""
-            promise.resolve(result)
+            
+            // 🎵 获取录音文件路径
+            val recordingPath = bridge?.getLastRecordingPath()
+            
+            val responseMap = Arguments.createMap()
+            responseMap.putString("text", result)
+            if (recordingPath != null) {
+                responseMap.putString("recordingPath", recordingPath)
+            }
+            
+            promise.resolve(responseMap)
             sendEvent("onRecognitionFinished", null)
             
             if (result.isNotEmpty()) {
                 val params = Arguments.createMap()
                 params.putString("text", result)
                 sendEvent("onRecognitionResult", params)
+            }
+            
+            // 🎵 发送录音文件路径事件
+            if (recordingPath != null) {
+                val params = Arguments.createMap()
+                params.putString("filePath", recordingPath)
+                sendEvent("onRecordingFileSaved", params)
             }
         } catch (e: Exception) {
             Log.e(TAG, "❌ Error finishing recognition: ${e.message}")

@@ -29,6 +29,7 @@ function App(): React.JSX.Element {
   const [recordTime, setRecordTime] = useState('00:00:00');
   const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
+  const [lastRecordingPath, setLastRecordingPath] = useState<string | null>(null);
 
   useEffect(() => {
     // 🚀 初始化新的双协程架构
@@ -38,6 +39,12 @@ function App(): React.JSX.Element {
     const resultSubscription = DeviceEventEmitter.addListener('onRecognitionResult', (event) => {
       console.log('📱 Real-time result update:', event.text);
       setRecognizedText(event.text);
+    });
+
+    // 🎵 监听录音文件保存事件
+    const fileSubscription = DeviceEventEmitter.addListener('onRecordingFileSaved', (event) => {
+      console.log('🎵 Recording file saved:', event.filePath);
+      setLastRecordingPath(event.filePath);
     });
 
     // 监听状态变化
@@ -55,6 +62,7 @@ function App(): React.JSX.Element {
 
     return () => {
       resultSubscription?.remove();
+      fileSubscription?.remove();
       startSubscription?.remove();
       stopSubscription?.remove();
       finishSubscription?.remove();
@@ -90,18 +98,17 @@ function App(): React.JSX.Element {
     }
 
     try {
-      const granted = await PermissionsAndroid.request(
+      const permissions = [
         PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-        {
-          title: '录音权限',
-          message: '需要录音权限来进行语音识别',
-          buttonNeutral: '稍后询问',
-          buttonNegative: '取消',
-          buttonPositive: '确定',
-        },
-      );
+        PermissionsAndroid.PERMISSIONS.WRITE_EXTERNAL_STORAGE,
+        PermissionsAndroid.PERMISSIONS.READ_EXTERNAL_STORAGE,
+      ];
+
+      const granted = await PermissionsAndroid.requestMultiple(permissions);
       
-      return granted === PermissionsAndroid.RESULTS.GRANTED;
+      return Object.values(granted).every(permission => 
+        permission === PermissionsAndroid.RESULTS.GRANTED
+      );
     } catch (err) {
       console.error('权限请求失败:', err);
       return false;
@@ -131,7 +138,7 @@ function App(): React.JSX.Element {
     }
   };
 
-  // 🎙️ 开始录音和语音识别（双协程架构）
+  // ��️ 开始录音和语音识别（双协程架构）
   const startRecording = async () => {
     if (!isInitialized) {
       Alert.alert('系统错误', '双协程架构尚未初始化完成');
@@ -140,7 +147,7 @@ function App(): React.JSX.Element {
 
     const hasPermission = await requestAudioPermission();
     if (!hasPermission) {
-      Alert.alert('权限错误', '需要录音权限才能使用语音识别功能');
+      Alert.alert('权限错误', '需要录音和存储权限才能使用语音识别功能');
       return;
     }
 
@@ -148,6 +155,7 @@ function App(): React.JSX.Element {
       setIsRecording(true);
       setStatus('🎙️ 录音中...');
       setRecordTime('00:00:00');
+      setLastRecordingPath(null); // 清除上次录音路径
       startRecordingTimer();
       
       // 🚀 启动双协程录音（AnonymousClass1 + AnonymousClass2）
@@ -170,8 +178,14 @@ function App(): React.JSX.Element {
       stopRecordingTimer();
       
       // 🛑 停止双协程录音
-      await SherpaOnnxModule.stopRecognition();
-      console.log('🛑 Dual-coroutine recognition stopped');
+      const result = await SherpaOnnxModule.stopRecognition();
+      console.log('🛑 Dual-coroutine recognition stopped', result);
+      
+      // 🎵 处理录音文件路径
+      if (result.recordingPath) {
+        setLastRecordingPath(result.recordingPath);
+        console.log('🎵 Recording saved to:', result.recordingPath);
+      }
       
       setIsRecording(false);
       setStatus('✅ 准备就绪');
@@ -188,6 +202,40 @@ function App(): React.JSX.Element {
   // 清空文本
   const clearText = () => {
     setRecognizedText('');
+    setLastRecordingPath(null);
+  };
+
+  // 🎵 上传录音文件（示例函数）
+  const uploadRecording = async () => {
+    if (!lastRecordingPath) {
+      Alert.alert('提示', '没有可上传的录音文件');
+      return;
+    }
+
+    try {
+      // 这里是上传到云端的示例代码
+      console.log('🎵 准备上传录音文件:', lastRecordingPath);
+      
+      // 你可以在这里添加实际的上传逻辑
+      // const formData = new FormData();
+      // formData.append('audio', {
+      //   uri: 'file://' + lastRecordingPath,
+      //   type: 'audio/wav',
+      //   name: 'recording.wav',
+      // });
+      
+      Alert.alert(
+        '录音文件信息', 
+        `文件路径: ${lastRecordingPath}\n\n可以使用此路径上传到云端服务`,
+        [
+          { text: '复制路径', onPress: () => console.log('Copy:', lastRecordingPath) },
+          { text: '确定' }
+        ]
+      );
+    } catch (error) {
+      console.error('上传失败:', error);
+      Alert.alert('错误', '上传失败');
+    }
   };
 
   return (
@@ -209,7 +257,7 @@ function App(): React.JSX.Element {
           </Text>
         )}
         <Text style={styles.architectureText}>
-          📱 原生AudioRecord + Channel通信 + 流式更新
+          📱 原生AudioRecord + Channel通信 + 流式更新 + 录音保存
         </Text>
       </View>
 
@@ -219,6 +267,15 @@ function App(): React.JSX.Element {
         {isRecording && (
           <Text style={styles.recordTime}>{recordTime}</Text>
         )}
+        {/* 🎵 录音文件信息 */}
+        {lastRecordingPath && (
+          <View style={styles.fileInfo}>
+            <Text style={styles.fileText}>🎵 录音已保存</Text>
+            <TouchableOpacity onPress={uploadRecording} style={styles.uploadButton}>
+              <Text style={styles.uploadButtonText}>查看文件信息</Text>
+            </TouchableOpacity>
+          </View>
+        )}
       </View>
 
       {/* 识别结果显示区域 - 流式更新 */}
@@ -226,7 +283,7 @@ function App(): React.JSX.Element {
         <ScrollView style={styles.resultScrollView}>
           <Text style={styles.recognizedText}>
             {recognizedText || (isInitialized ? 
-              '🎙️ 点击开始录音，体验双协程流式识别...\n\n✨ 特性：\n• 原生AudioRecord录音\n• 双协程并行处理\n• Channel通信机制\n• 实时流式更新\n• VAD语音分段\n• 多语言识别（中英日韩粤）' : 
+              '🎙️ 点击开始录音，体验双协程流式识别...\n\n✨ 特性：\n• 原生AudioRecord录音\n• 双协程并行处理\n• Channel通信机制\n• 实时流式更新\n• VAD语音分段\n• 多语言识别（中英日韩粤）\n• 🎵 自动保存WAV录音文件\n• 📤 支持云端上传' : 
               '🔄 正在初始化双协程架构，请稍候...'
             )}
           </Text>
@@ -257,13 +314,25 @@ function App(): React.JSX.Element {
         </TouchableOpacity>
       </View>
 
+      {/* 🎵 文件操作区域 */}
+      {lastRecordingPath && (
+        <View style={styles.fileActionsContainer}>
+          <TouchableOpacity
+            style={styles.uploadMainButton}
+            onPress={uploadRecording}
+          >
+            <Text style={styles.uploadMainButtonText}>📤 查看录音文件</Text>
+          </TouchableOpacity>
+        </View>
+      )}
+
       {/* 底部信息 */}
       <View style={styles.footerContainer}>
         <Text style={styles.footerText}>
           🚀 SenseVoice 双协程架构 {isInitialized ? '已就绪' : '准备中'}
         </Text>
         <Text style={styles.architectureInfo}>
-          复刻反编译APK的流式处理机制
+          复刻反编译APK的流式处理机制 + WAV录音保存
         </Text>
       </View>
     </ScrollView>
@@ -337,6 +406,27 @@ const styles = StyleSheet.create({
     marginTop: 4,
     fontFamily: 'monospace',
   },
+  fileInfo: {
+    marginTop: 8,
+    alignItems: 'center',
+  },
+  fileText: {
+    fontSize: 12,
+    color: '#4CAF50',
+    fontWeight: 'bold',
+  },
+  uploadButton: {
+    backgroundColor: '#4CAF50',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginTop: 4,
+  },
+  uploadButtonText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
   textContainer: {
     flex: 1,
     margin: 16,
@@ -398,6 +488,23 @@ const styles = StyleSheet.create({
   clearButtonText: {
     color: '#ffffff',
     fontSize: 16,
+    fontWeight: 'bold',
+  },
+  fileActionsContainer: {
+    padding: 16,
+    backgroundColor: '#ffffff',
+    marginTop: 8,
+  },
+  uploadMainButton: {
+    backgroundColor: '#2196F3',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 20,
+    alignItems: 'center',
+  },
+  uploadMainButtonText: {
+    color: '#ffffff',
+    fontSize: 14,
     fontWeight: 'bold',
   },
   footerContainer: {
