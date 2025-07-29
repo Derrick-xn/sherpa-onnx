@@ -4,13 +4,12 @@ import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.NativeModule
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
-import com.sherpaonnxapp.audio.AudioRecorderModule
 
 class SherpaOnnxPackage : ReactPackage {
     override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> {
         return listOf(
-            SherpaOnnxModule(reactContext),
-            AudioRecorderModule(reactContext)
+            SherpaOnnxModule(reactContext)
+            // 🚀 只保留新的双协程SherpaOnnxModule
         )
     }
 

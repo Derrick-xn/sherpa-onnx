@@ -7,7 +7,6 @@
 
 import React, {useState, useEffect} from 'react';
 import {
-  SafeAreaView,
   ScrollView,
   StatusBar,
   StyleSheet,
@@ -21,7 +20,7 @@ import {
   DeviceEventEmitter,
 } from 'react-native';
 
-const { SherpaOnnxModule, AudioRecorderModule } = NativeModules;
+const { SherpaOnnxModule } = NativeModules;
 
 function App(): React.JSX.Element {
   const [isRecording, setIsRecording] = useState(false);
@@ -32,67 +31,81 @@ function App(): React.JSX.Element {
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    // 初始化Sherpa-ONNX
-    initializeSherpaOnnx();
+    // 🚀 初始化新的双协程架构
+    initializeDualCoroutineRecognizer();
 
-    // 监听音频数据
-    const audioDataSubscription = DeviceEventEmitter.addListener('onAudioData', (event) => {
-      console.log('Audio data received:', event.audioData ? event.audioData.length : 'null');
-      if (event.audioData && event.audioData.length > 0) {
-        processAudioData(event.audioData, event.sampleRate);
-      }
-    });
-
-    // 监听语音识别结果
+    // 🎯 监听流式识别结果（反编译APK风格）
     const resultSubscription = DeviceEventEmitter.addListener('onRecognitionResult', (event) => {
-      console.log('Recognition result event:', event.text);
+      console.log('📱 Real-time result update:', event.text);
       setRecognizedText(event.text);
     });
 
-    return () => {
-      if (recordingInterval) {
-        clearInterval(recordingInterval);
-      }
-      audioDataSubscription.remove();
-      resultSubscription.remove();
-    };
-  }, [recordingInterval]);
+    // 监听状态变化
+    const startSubscription = DeviceEventEmitter.addListener('onRecognitionStarted', () => {
+      console.log('🎙️ Recognition started');
+    });
 
-  const initializeSherpaOnnx = async () => {
+    const stopSubscription = DeviceEventEmitter.addListener('onRecognitionStopped', () => {
+      console.log('🛑 Recognition stopped');
+    });
+
+    const finishSubscription = DeviceEventEmitter.addListener('onRecognitionFinished', () => {
+      console.log('✅ Recognition finished');
+    });
+
+    return () => {
+      resultSubscription?.remove();
+      startSubscription?.remove();
+      stopSubscription?.remove();
+      finishSubscription?.remove();
+    };
+  }, []);
+
+  // 🚀 初始化双协程架构识别器
+  const initializeDualCoroutineRecognizer = async () => {
     try {
-      setStatus('正在初始化语音识别...');
-      await SherpaOnnxModule.initialize();
-      setIsInitialized(true);
-      setStatus('准备就绪');
-      console.log('Sherpa-ONNX initialized successfully');
+      setStatus('正在初始化双协程架构...');
+      console.log('🚀 Initializing dual-coroutine SenseVoice recognizer');
+      
+      const initialized = await SherpaOnnxModule.initialize();
+      if (initialized) {
+        setIsInitialized(true);
+        setStatus('✅ 双协程架构就绪');
+        console.log('✅ Dual-coroutine architecture initialized successfully');
+      } else {
+        setStatus('❌ 初始化失败');
+        console.error('❌ Failed to initialize dual-coroutine architecture');
+      }
     } catch (error) {
-      console.error('Failed to initialize Sherpa-ONNX:', error);
-      setStatus('初始化失败');
-      Alert.alert('初始化错误', '语音识别初始化失败，请重试');
+      console.error('❌ Initialization error:', error);
+      setStatus('❌ 初始化错误');
+      Alert.alert('初始化失败', '无法初始化语音识别系统');
     }
   };
 
-  // 请求录音权限
-  const requestAudioPermission = async () => {
-    if (Platform.OS === 'android') {
-      try {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
-          {
-            title: '录音权限',
-            message: '应用需要录音权限来进行语音识别',
-            buttonNeutral: '稍后询问',
-            buttonNegative: '取消',
-            buttonPositive: '确定',
-          },
-        );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
-      } catch (err) {
-        console.warn(err);
-        return false;
-      }
+  // 获取录音权限
+  const requestAudioPermission = async (): Promise<boolean> => {
+    if (Platform.OS !== 'android') {
+      return true;
     }
-    return true;
+
+    try {
+      const granted = await PermissionsAndroid.request(
+        PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+        {
+          title: '录音权限',
+          message: '需要录音权限来进行语音识别',
+          buttonNeutral: '稍后询问',
+          buttonNegative: '取消',
+          buttonPositive: '确定',
+        },
+      );
+      
+      return granted === PermissionsAndroid.RESULTS.GRANTED;
+    } catch (err) {
+      console.error('权限请求失败:', err);
+      return false;
+    }
   };
 
   // 录音计时器
@@ -118,39 +131,10 @@ function App(): React.JSX.Element {
     }
   };
 
-  // 处理音频数据
-  const processAudioData = async (audioData: number[], sampleRate: number) => {
-    try {
-      console.log('=== processAudioData called ===');
-      console.log('Audio data length:', audioData.length);
-      console.log('Sample rate:', sampleRate);
-      console.log('Sample values (first 10):', audioData.slice(0, 10));
-
-      if (audioData.length > 0) {
-        console.log('Calling SherpaOnnxModule.processAudio...');
-        const result = await SherpaOnnxModule.processAudio(audioData, sampleRate);
-        console.log('Recognition result:', result);
-        
-        if (result && result.trim().length > 0) {
-          console.log('Setting recognized text:', result);
-          setRecognizedText(prev => {
-            const timestamp = new Date().toLocaleTimeString();
-            const newText = `[${timestamp}] ${result}`;
-            return prev ? `${prev}\n\n${newText}` : newText;
-          });
-        } else {
-          console.log('Result is empty or null');
-        }
-      }
-    } catch (error) {
-      console.error('音频处理失败:', error);
-    }
-  };
-
-  // 开始录音和语音识别
+  // 🎙️ 开始录音和语音识别（双协程架构）
   const startRecording = async () => {
     if (!isInitialized) {
-      Alert.alert('系统错误', '语音识别尚未初始化完成');
+      Alert.alert('系统错误', '双协程架构尚未初始化完成');
       return;
     }
 
@@ -162,44 +146,41 @@ function App(): React.JSX.Element {
 
     try {
       setIsRecording(true);
-      setStatus('正在录音...');
+      setStatus('🎙️ 录音中...');
       setRecordTime('00:00:00');
       startRecordingTimer();
       
-      // 启动Sherpa-ONNX识别
+      // 🚀 启动双协程录音（AnonymousClass1 + AnonymousClass2）
       await SherpaOnnxModule.startRecognition();
-      console.log('SherpaOnnx recognition started');
-      
-      // 开始录音
-      await AudioRecorderModule.startRecording();
-      console.log('AudioRecorder started');
+      console.log('🎙️ Dual-coroutine recognition started successfully');
       
     } catch (error) {
-      console.error('录音启动失败:', error);
+      console.error('❌ 启动录音失败:', error);
       setIsRecording(false);
-      setStatus('录音失败');
+      setStatus('❌ 录音失败');
+      stopRecordingTimer();
       Alert.alert('错误', '录音启动失败，请重试');
     }
   };
 
-  // 停止录音和语音识别
+  // 🛑 停止录音和语音识别
   const stopRecording = async () => {
     try {
-      setStatus('处理中...');
+      setStatus('🔄 处理中...');
       stopRecordingTimer();
       
-      // 停止录音
-      await AudioRecorderModule.stopRecording();
-      console.log('Recording stopped');
+      // 🛑 停止双协程录音
+      await SherpaOnnxModule.stopRecognition();
+      console.log('🛑 Dual-coroutine recognition stopped');
       
       setIsRecording(false);
-      setStatus('准备就绪');
+      setStatus('✅ 准备就绪');
       setRecordTime('00:00:00');
       
     } catch (error) {
-      console.error('停止录音失败:', error);
+      console.error('❌ 停止录音失败:', error);
       setIsRecording(false);
-      setStatus('停止录音失败');
+      setStatus('❌ 停止失败');
       Alert.alert('错误', '停止录音失败');
     }
   };
@@ -207,27 +188,29 @@ function App(): React.JSX.Element {
   // 清空文本
   const clearText = () => {
     setRecognizedText('');
-    setStatus('准备就绪');
   };
 
   return (
     <ScrollView style={styles.container}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       
-      {/* 标题区域 - 更接近Flutter风格 */}
+      {/* 标题区域 - 反编译APK风格 */}
       <View style={styles.headerContainer}>
         <Text style={styles.titleText}>SenseVoice 语音识别</Text>
         <Text style={styles.subtitleText}>基于 Sherpa-ONNX + VAD</Text>
         <View style={styles.statusBadge}>
           <Text style={styles.statusBadgeText}>
-            {isInitialized ? '✅ 已初始化' : '🔄 初始化中...'}
+            {isInitialized ? '✅ 双协程就绪' : '🔄 初始化中...'}
           </Text>
         </View>
         {isInitialized && (
           <Text style={styles.configText}>
-            🎯 识别器: 2线程 | 🔧 VAD: 1线程 | 📋 严格复刻反编译APK
+            🚀 AnonymousClass1: 录音协程 | 🔄 AnonymousClass2: 处理协程
           </Text>
         )}
+        <Text style={styles.architectureText}>
+          📱 原生AudioRecord + Channel通信 + 流式更新
+        </Text>
       </View>
 
       {/* 状态指示区域 */}
@@ -238,19 +221,19 @@ function App(): React.JSX.Element {
         )}
       </View>
 
-      {/* 识别结果显示区域 - Flutter风格 */}
+      {/* 识别结果显示区域 - 流式更新 */}
       <View style={styles.textContainer}>
         <ScrollView style={styles.resultScrollView}>
           <Text style={styles.recognizedText}>
             {recognizedText || (isInitialized ? 
-              '开始说话，体验多语言实时识别...\n支持：中文、英文、日文、韩文、粤语' : 
-              '正在初始化模型，请稍候...'
+              '🎙️ 点击开始录音，体验双协程流式识别...\n\n✨ 特性：\n• 原生AudioRecord录音\n• 双协程并行处理\n• Channel通信机制\n• 实时流式更新\n• VAD语音分段\n• 多语言识别（中英日韩粤）' : 
+              '🔄 正在初始化双协程架构，请稍候...'
             )}
           </Text>
         </ScrollView>
       </View>
 
-      {/* 控制按钮 - 参考Flutter的设计 */}
+      {/* 控制按钮 - 反编译APK风格 */}
       <View style={styles.controlsContainer}>
         <TouchableOpacity
           style={[
@@ -262,7 +245,7 @@ function App(): React.JSX.Element {
           disabled={!isInitialized}
         >
           <Text style={styles.recordButtonText}>
-            {isRecording ? '停止录音' : '开始录音'}
+            {isRecording ? '🛑 停止录音' : '🎙️ 开始录音'}
           </Text>
         </TouchableOpacity>
 
@@ -270,14 +253,17 @@ function App(): React.JSX.Element {
           style={styles.clearButton}
           onPress={clearText}
         >
-          <Text style={styles.clearButtonText}>清空文本</Text>
+          <Text style={styles.clearButtonText}>🗑️ 清空文本</Text>
         </TouchableOpacity>
       </View>
 
       {/* 底部信息 */}
       <View style={styles.footerContainer}>
         <Text style={styles.footerText}>
-          SenseVoice 多语言语音识别{isInitialized ? '已就绪' : '准备中'}
+          🚀 SenseVoice 双协程架构 {isInitialized ? '已就绪' : '准备中'}
+        </Text>
+        <Text style={styles.architectureInfo}>
+          复刻反编译APK的流式处理机制
         </Text>
       </View>
     </ScrollView>
@@ -310,24 +296,31 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   statusBadge: {
-    backgroundColor: '#E0F2F7',
-    borderRadius: 10,
-    paddingVertical: 4,
-    paddingHorizontal: 10,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
     marginTop: 8,
     borderWidth: 1,
-    borderColor: '#B0E0E6',
+    borderColor: '#2196F3',
   },
   statusBadgeText: {
     fontSize: 12,
-    color: '#007BFF',
+    color: '#1976D2',
     fontWeight: 'bold',
   },
   configText: {
-    fontSize: 12,
+    fontSize: 11,
     color: '#666666',
     marginTop: 8,
     textAlign: 'center',
+  },
+  architectureText: {
+    fontSize: 10,
+    color: '#9E9E9E',
+    marginTop: 4,
+    textAlign: 'center',
+    fontStyle: 'italic',
   },
   statusContainer: {
     padding: 16,
@@ -408,7 +401,7 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   footerContainer: {
-    padding: 10,
+    padding: 16,
     alignItems: 'center',
     backgroundColor: '#ffffff',
   },
@@ -416,6 +409,12 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999999',
     fontStyle: 'italic',
+  },
+  architectureInfo: {
+    fontSize: 10,
+    color: '#BDBDBD',
+    marginTop: 4,
+    textAlign: 'center',
   },
 });
 

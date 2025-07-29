@@ -19,9 +19,17 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
         try {
             val assetManager: AssetManager = reactContext.assets
             bridge = SherpaOnnxBridge(assetManager)
-            Log.i(TAG, "SherpaOnnxModule initialized")
+            
+            // 🚀 设置回调，实现反编译APK式的流畅更新
+            bridge?.setResultCallback { resultText ->
+                val params = Arguments.createMap()
+                params.putString("text", resultText)
+                sendEvent("onRecognitionResult", params)
+            }
+            
+            Log.i(TAG, "🎯 SherpaOnnxModule initialized with APK-style architecture")
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to initialize SherpaOnnxModule: ${e.message}")
+            Log.e(TAG, "❌ Failed to initialize SherpaOnnxModule: ${e.message}")
         }
     }
 
@@ -31,12 +39,12 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
             val success = bridge?.initialize() ?: false
             if (success) {
                 promise.resolve(true)
-                Log.i(TAG, "Recognizer initialized successfully")
+                Log.i(TAG, "✅ Recognizer initialized successfully")
             } else {
                 promise.reject("INIT_ERROR", "Failed to initialize recognizer")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error initializing recognizer: ${e.message}")
+            Log.e(TAG, "❌ Error initializing recognizer: ${e.message}")
             promise.reject("INIT_ERROR", e.message)
         }
     }
@@ -48,48 +56,42 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
             if (success) {
                 promise.resolve(true)
                 sendEvent("onRecognitionStarted", null)
+                Log.i(TAG, "🎙️ Dual-coroutine recognition started")
             } else {
                 promise.reject("START_ERROR", "Failed to start recognition")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error starting recognition: ${e.message}")
+            Log.e(TAG, "❌ Error starting recognition: ${e.message}")
             promise.reject("START_ERROR", e.message)
         }
     }
 
     @ReactMethod
-    fun processAudio(audioData: ReadableArray, sampleRate: Int, promise: Promise) {
+    fun stopRecognition(promise: Promise) {
         try {
-            Log.d(TAG, "=== processAudio called ===")
-            Log.d(TAG, "Audio data size: ${audioData.size()}")
-            Log.d(TAG, "Sample rate: $sampleRate")
-            
-            val floatArray = FloatArray(audioData.size())
-            for (i in 0 until audioData.size()) {
-                floatArray[i] = audioData.getDouble(i).toFloat()
-            }
-            
-            Log.d(TAG, "Converted to float array, length: ${floatArray.size}")
-            if (floatArray.isNotEmpty()) {
-                Log.d(TAG, "Sample values (first 5): ${floatArray.take(5)}")
-            }
-            
-            val result = bridge?.processAudio(floatArray, sampleRate) ?: ""
-            Log.d(TAG, "Bridge returned result: '$result'")
-            
-            promise.resolve(result)
-            
-            if (result.isNotEmpty()) {
-                Log.d(TAG, "Sending recognition result event")
-                val params = Arguments.createMap()
-                params.putString("text", result)
-                sendEvent("onRecognitionResult", params)
+            val success = bridge?.stopRecognition() ?: false
+            if (success) {
+                promise.resolve(true)
+                sendEvent("onRecognitionStopped", null)
+                Log.i(TAG, "🛑 Recognition stopped successfully")
             } else {
-                Log.d(TAG, "Result is empty, not sending event")
+                promise.reject("STOP_ERROR", "Failed to stop recognition")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error processing audio: ${e.message}")
-            e.printStackTrace()
+            Log.e(TAG, "❌ Error stopping recognition: ${e.message}")
+            promise.reject("STOP_ERROR", e.message)
+        }
+    }
+
+    // 🎯 保留兼容性：由于现在使用原生AudioRecord，这个方法主要用于获取当前状态
+    @ReactMethod
+    fun processAudio(audioData: ReadableArray, sampleRate: Int, promise: Promise) {
+        try {
+            // 现在主要通过原生AudioRecord处理，这里返回当前结果即可
+            val result = bridge?.processAudio(FloatArray(0), sampleRate) ?: ""
+            promise.resolve(result)
+        } catch (e: Exception) {
+            Log.e(TAG, "❌ Error in processAudio: ${e.message}")
             promise.reject("PROCESS_ERROR", e.message)
         }
     }
@@ -107,7 +109,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
                 sendEvent("onRecognitionResult", params)
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error finishing recognition: ${e.message}")
+            Log.e(TAG, "❌ Error finishing recognition: ${e.message}")
             promise.reject("FINISH_ERROR", e.message)
         }
     }
@@ -118,7 +120,7 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
             bridge?.destroy()
             promise.resolve(true)
         } catch (e: Exception) {
-            Log.e(TAG, "Error destroying recognizer: ${e.message}")
+            Log.e(TAG, "❌ Error destroying recognizer: ${e.message}")
             promise.reject("DESTROY_ERROR", e.message)
         }
     }
