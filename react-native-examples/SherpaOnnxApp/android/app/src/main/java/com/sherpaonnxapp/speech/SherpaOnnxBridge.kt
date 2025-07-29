@@ -236,7 +236,7 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
                 initialize()
             }
             
-            // 重置状态（复刻反编译APK）
+            // 🔧 彻底重置所有状态，确保干净开始
             audioBuffer.clear()
             resultList.clear()
             lastText = ""
@@ -248,6 +248,9 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             startTime = System.currentTimeMillis()
             added = false
             currentPartialText = ""
+            
+            // 🔧 立即发送空结果，清空UI显示
+            onResultCallback?.invoke("")
             
             // 🎵 初始化录音文件
             initializeAudioFile()
@@ -321,19 +324,25 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         try {
             audioBuffer.addAll(floatSamples.toList())
             
-            // 🔧 检测静音状态
-            val hasSignificantAudio = floatSamples.any { kotlin.math.abs(it) > 0.01f }
+            // 🔧 更严格的音频信号检测
+            val audioEnergy = floatSamples.sumOf { kotlin.math.abs(it.toDouble()) } / floatSamples.size
+            val hasSignificantAudio = audioEnergy > 0.005 // 提高阈值
             
             if (!hasSignificantAudio) {
                 silentCounter++
-                // 🔧 静音时清除实时文本，避免闪动
-                if (silentCounter > maxSilentFrames && currentPartialText.isNotEmpty()) {
+                // 🔧 静音时立即清除实时文本，避免虚假识别
+                if (silentCounter > 3 && currentPartialText.isNotEmpty()) {
                     currentPartialText = ""
                     updateResults()
                     Log.d(TAG, "🔇 Cleared partial text due to silence")
                 }
+                // 🔧 长时间静音时不进行实时识别
+                if (silentCounter > maxSilentFrames) {
+                    return
+                }
             } else {
                 silentCounter = 0
+                isSpeechStarted = true // 标记开始有语音输入
             }
             
             // 🎯 VAD处理 - 主要用于检测完整语音段
@@ -348,8 +357,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
                 offset += removeCount
             }
             
-            // 🎯 优化的实时识别 - 只在有音频输入时进行
-            if (hasSignificantAudio && audioBuffer.size >= windowSize && audioBuffer.size % 800 == 0) {
+            // 🔧 只在确实有语音输入且音频能量足够时才进行实时识别
+            if (hasSignificantAudio && isSpeechStarted && audioBuffer.size >= windowSize && audioBuffer.size % 800 == 0) {
                 performStableRealtimeRecognition()
             }
         } catch (e: Exception) {
@@ -426,6 +435,12 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
                 windowAudio[i] = audioBuffer[windowStart + i]
             }
             
+            // 🔧 检查音频窗口的音频能量，避免处理静音段
+            val windowEnergy = windowAudio.sumOf { kotlin.math.abs(it.toDouble()) } / windowAudio.size
+            if (windowEnergy < 0.003) {
+                return // 跳过低能量音频段
+            }
+            
             val stream = offlineRecognizer?.createStream()
             stream?.acceptWaveform(windowAudio, sampleRate)
             
@@ -433,11 +448,11 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             val result = offlineRecognizer?.getResult(stream!!)
             val text = result?.text?.trim() ?: ""
             
-            // 🔧 优化稳定性检查 - 避免显示无意义文本
-            if (text.isNotEmpty() && text.length > 2 && !isRepeatedCharacter(text) && text != lastText) {
+            // 🔧 更严格的文本过滤：避免单词、重复字符、过短文本
+            if (isValidRecognitionText(text) && text != lastText) {
                 if (text == lastStableText) {
                     stableCounter++
-                    if (stableCounter >= 3) { // 🔧 提高稳定性要求
+                    if (stableCounter >= 5) { // 🔧 进一步提高稳定性要求
                         lastText = text
                         currentPartialText = text
                         updateResults()
@@ -453,6 +468,22 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             Log.e(TAG, "Error in realtime recognition: ${e.message}")
         }
     }
+    
+    // 🔧 更严格的文本验证
+    private fun isValidRecognitionText(text: String): Boolean {
+        if (text.isEmpty() || text.length < 3) return false
+        if (isRepeatedCharacter(text)) return false
+        
+        // 过滤常见的虚假识别结果
+        val invalidTexts = listOf("yeah", "uh", "um", "ah", "oh", "er", "呃", "嗯", "啊", "哦")
+        if (invalidTexts.any { text.lowercase().contains(it) && text.length <= 6 }) {
+            return false
+        }
+        
+        // 确保包含有意义的字符（中文、英文单词等）
+        val hasMeaningfulContent = text.any { it.isLetter() || it in '\u4e00'..'\u9fff' }
+        return hasMeaningfulContent
+    }
 
     // 🎯 更新结果显示（复刻反编译APK格式）
     private fun updateResults() {
@@ -466,8 +497,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             }
         }
         
-        // 🔧 只在有意义时添加当前部分识别结果
-        if (currentPartialText.isNotEmpty() && currentPartialText.length > 2) {
+        // 🔧 只在有有效识别结果时添加当前部分识别结果
+        if (currentPartialText.isNotEmpty() && isValidRecognitionText(currentPartialText)) {
             if (displayText.isNotEmpty()) {
                 displayText.append("\n")
             }
@@ -584,8 +615,8 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             }
         }
         
-        // 🔧 只在有意义时显示当前部分文本
-        if (currentPartialText.isNotEmpty() && currentPartialText.length > 2) {
+        // 🔧 只在有有效识别结果时显示当前部分文本
+        if (currentPartialText.isNotEmpty() && isValidRecognitionText(currentPartialText)) {
             if (displayText.isNotEmpty()) {
                 displayText.append("\n")
             }

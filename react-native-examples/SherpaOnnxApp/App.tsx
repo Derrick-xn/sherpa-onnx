@@ -138,7 +138,7 @@ function App(): React.JSX.Element {
     }
   };
 
-  // ��️ 开始录音和语音识别（双协程架构）
+  // 🎙️ 开始录音和语音识别（双协程架构）
   const startRecording = async () => {
     if (!isInitialized) {
       Alert.alert('系统错误', '双协程架构尚未初始化完成');
@@ -152,11 +152,16 @@ function App(): React.JSX.Element {
     }
 
     try {
+      // 🔧 清空之前的识别结果
+      setRecognizedText('');
       setIsRecording(true);
       setStatus('🎙️ 录音中...');
       setRecordTime('00:00:00');
       setLastRecordingPath(null); // 清除上次录音路径
       startRecordingTimer();
+      
+      // 🔧 添加小延迟确保权限状态稳定
+      await new Promise(resolve => setTimeout(resolve, 100));
       
       // 🚀 启动双协程录音（AnonymousClass1 + AnonymousClass2）
       await SherpaOnnxModule.startRecognition();
@@ -167,7 +172,7 @@ function App(): React.JSX.Element {
       setIsRecording(false);
       setStatus('❌ 录音失败');
       stopRecordingTimer();
-      Alert.alert('错误', '录音启动失败，请重试');
+      Alert.alert('错误', `录音启动失败: ${error instanceof Error ? error.message : '未知错误'}`);
     }
   };
 
