@@ -25,15 +25,21 @@ const { SherpaOnnxModule } = NativeModules;
 function App(): React.JSX.Element {
   const [isRecording, setIsRecording] = useState(false);
   const [recognizedText, setRecognizedText] = useState('');
-  const [status, setStatus] = useState('准备就绪');
+  const [status, setStatus] = useState('正在初始化...');
   const [recordTime, setRecordTime] = useState('00:00:00');
   const [recordingInterval, setRecordingInterval] = useState<NodeJS.Timeout | null>(null);
   const [isInitialized, setIsInitialized] = useState(false);
   const [lastRecordingPath, setLastRecordingPath] = useState<string | null>(null);
 
   useEffect(() => {
-    // 🚀 初始化新的双协程架构
-    initializeDualCoroutineRecognizer();
+    // 🎯 监听后台预初始化完成事件
+    const initSubscription = DeviceEventEmitter.addListener('onInitialized', (event) => {
+      if (event.success) {
+        console.log('🚀 后台预初始化已完成');
+        setIsInitialized(true);
+        setStatus('✅ 双协程架构就绪');
+      }
+    });
 
     // 🎯 监听流式识别结果（反编译APK风格）
     const resultSubscription = DeviceEventEmitter.addListener('onRecognitionResult', (event) => {
@@ -60,7 +66,11 @@ function App(): React.JSX.Element {
       console.log('✅ Recognition finished');
     });
 
+    // 🚀 尝试检查初始化状态
+    checkInitializationStatus();
+
     return () => {
+      initSubscription?.remove();
       resultSubscription?.remove();
       fileSubscription?.remove();
       startSubscription?.remove();
@@ -68,6 +78,23 @@ function App(): React.JSX.Element {
       finishSubscription?.remove();
     };
   }, []);
+
+  // 🚀 检查初始化状态
+  const checkInitializationStatus = async () => {
+    try {
+      // 由于已经在原生层做了后台预初始化，这里只是再次确认一下状态
+      const initialized = await SherpaOnnxModule.initialize();
+      if (initialized) {
+        setIsInitialized(true);
+        setStatus('✅ 双协程架构就绪');
+        console.log('✅ Dual-coroutine architecture initialized successfully');
+      } else {
+        setStatus('⏳ 仍在初始化中...');
+      }
+    } catch (error) {
+      console.error('❌ Initialization check error:', error);
+    }
+  };
 
   // 🚀 初始化双协程架构识别器
   const initializeDualCoroutineRecognizer = async () => {
@@ -141,8 +168,13 @@ function App(): React.JSX.Element {
   // 🎙️ 开始录音和语音识别（双协程架构）
   const startRecording = async () => {
     if (!isInitialized) {
-      Alert.alert('系统错误', '双协程架构尚未初始化完成');
-      return;
+      // 如果没初始化，尝试再初始化一次
+      await initializeDualCoroutineRecognizer();
+      
+      if (!isInitialized) {
+        Alert.alert('系统错误', '双协程架构尚未初始化完成');
+        return;
+      }
     }
 
     const hasPermission = await requestAudioPermission();

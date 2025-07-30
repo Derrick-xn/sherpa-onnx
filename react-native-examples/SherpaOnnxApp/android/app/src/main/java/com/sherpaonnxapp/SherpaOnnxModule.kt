@@ -27,6 +27,23 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
                 sendEvent("onRecognitionResult", params)
             }
             
+            // 🚀 立即开始后台初始化，不等待JS层调用
+            Thread {
+                try {
+                    val success = bridge?.initialize() ?: false
+                    if (success) {
+                        Log.i(TAG, "✅ 后台预初始化成功")
+                        val params = Arguments.createMap()
+                        params.putBoolean("success", true)
+                        sendEvent("onInitialized", params)
+                    } else {
+                        Log.e(TAG, "❌ 后台预初始化失败")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "❌ 后台预初始化错误: ${e.message}")
+                }
+            }.start()
+            
             Log.i(TAG, "🎯 SherpaOnnxModule initialized with APK-style architecture")
         } catch (e: Exception) {
             Log.e(TAG, "❌ Failed to initialize SherpaOnnxModule: ${e.message}")
@@ -36,6 +53,13 @@ class SherpaOnnxModule(reactContext: ReactApplicationContext) : ReactContextBase
     @ReactMethod
     fun initialize(promise: Promise) {
         try {
+            // 如果已经初始化成功，直接返回true
+            if (bridge?.isInitialized() == true) {
+                promise.resolve(true)
+                Log.i(TAG, "✅ Recognizer already initialized")
+                return
+            }
+            
             val success = bridge?.initialize() ?: false
             if (success) {
                 promise.resolve(true)
