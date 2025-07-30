@@ -450,17 +450,11 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
             
             // 🔧 更严格的文本过滤：避免单词、重复字符、过短文本
             if (isValidRecognitionText(text) && text != lastText) {
-                if (text == lastStableText) {
-                    stableCounter++
-                    if (stableCounter >= 5) { // 🔧 进一步提高稳定性要求
-                        lastText = text
-                        currentPartialText = text
-                        updateResults()
-                    }
-                } else {
-                    lastStableText = text
-                    stableCounter = 1
-                }
+                // 取消稳定性要求，立即显示有效识别结果
+                lastText = text
+                currentPartialText = text
+                updateResults()
+                Log.d(TAG, "🔊 立即显示识别结果: $text")
             }
             
             stream?.release()
@@ -502,7 +496,7 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         //    if (displayText.isNotEmpty()) {
          //       displayText.append("\n")
         //    }
-            displayText.append("${resultList.size + 1}: $currentPartialText")
+            displayText.append("$currentPartialText")
         }
         
         // 回调更新UI（模拟反编译APK的自动滚动效果）
