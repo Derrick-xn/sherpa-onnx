@@ -486,16 +486,10 @@ class SherpaOnnxBridge(private val assetManager: AssetManager) {
         // 添加已完成的识别结果
         resultList.forEachIndexed { index, text ->
             displayText.append("$text")
-//            if (index < resultList.size - 1) {
-  //              displayText.append("\n")
-    //        }
         }
         
         // 🔧 只在有有效识别结果时添加当前部分识别结果
         if (currentPartialText.isNotEmpty() && isValidRecognitionText(currentPartialText)) {
-        //    if (displayText.isNotEmpty()) {
-         //       displayText.append("\n")
-        //    }
             displayText.append("$currentPartialText")
         }
         
